@@ -4,8 +4,7 @@
 #include <stdbool.h>
 #include <math.h>
 #include <errno.h>
-
-int dkey = 9;
+#include <crtdbg.h>
 
 void printArray(const char* str) {
 	while (*str != '\0') {
@@ -15,32 +14,33 @@ void printArray(const char* str) {
 	printf("\n");
 }
 
-int readBinFile(const char* filename, unsigned int** output, int* size) {
-	FILE* filePtr;
+int readBinFile(const char* filename, char** output, int key) {
+	FILE *filePtr;
 	errno_t errorCode = fopen_s(&filePtr, filename, "rb");
 
 	if (errorCode != 0) return 2; //Error Code
 
-	//Error cases
+	fseek(filePtr, 0, SEEK_END);
 	long fsize = ftell(filePtr);
-	size_t num = fsize / sizeof(unsigned int);
-	if (fseek(filePtr, 0, SEEK_END) != 0 || fsize == -1L || fseek(filePtr, 0, SEEK_SET) != 0) {
-		fclose(filePtr);
-		return 2; //Error Code
-	}
+	fseek(filePtr, 0, SEEK_SET);
+	size_t num = fsize / sizeof(int);
 
-	*output = (unsigned int *)malloc(num * sizeof(unsigned int));
+	*output = (char *)malloc((num + 1) * sizeof(char));
 	if (*output == NULL) {
 		fclose(filePtr);
 		return 2; //Error Code
 	}
 
-	size_t bytes = fread(*output, sizeof(unsigned int), 2, filePtr);
-	if (bytes != num) {
-		//(filePtr);
-		//return 2; //Error Code
+	//Reading
+	int value;
+	size_t i = 0;
+	while (fread(&value, sizeof(int), 1, filePtr) == 1 && i < num ) {
+		(*output)[i] = (char)value - i - key;
+		if (((char)value - i - key) == '\n') num--;
+		i++;
 	}
-	printf("%c\n", (*output[0]));
+	(*output)[num] = '\0';
+
 	fclose(filePtr);
 	return 1; //Success code
 }
@@ -51,7 +51,7 @@ int writeBinFile(char* filename, int** input, size_t size) {
 
 	if (errorCode != 0) return 2; //Error Code
 
-	size_t strSize = fwrite(*input, sizeof(unsigned int), size, filePtr);
+	size_t strSize = fwrite(*input, sizeof(int), size, filePtr);
 	
 	if (strSize != size) return 2; //Error Code
 	
@@ -87,113 +87,99 @@ int readTextFile(const char *filename, char **str) {
 	return 1; //Success code
 }
 
-//For writing binary to a text file
-char* itob(unsigned int num) {
-	char* binary = (char*)malloc(33 * sizeof(char));
+int writeTextFile(const char* filename, char* contents) {
+	FILE* filePtr;
+	errno_t errorCode = fopen_s(&filePtr, filename, "w");
 
-	if (binary == NULL) {
-		return NULL;
-	}
+	if (errorCode != 0) return 2;
 
-	for (int i = 31; i > -1; i--) {
-		if (num >= pow(2, i)) {
-			binary[i] = '1';
-			printf("1");
-			num -= pow(2, i);
-		}
-		else {
-			printf("0");
-			binary[i] = '0';
-		}
-	}
-	binary[32] = '\0';
-	return *binary;
+	fprintf(filePtr, "%s", contents);
+
+	fclose(filePtr);
+	return 1;
 }
 
-//For printing in binary
-void itob2(unsigned int num) {
-	bool binary[32];
-	for (int i = 31; i > -1; i--) {
-		if (num >= pow(2, i)) {
-			binary[i] = true;
-			num -= pow(2, i);
-			printf("1");
-		}
-		else {
-			binary[i] = false;
-			printf("0");
-		}
-	}
-}
-
-void encrypt(char* filename, unsigned int** output, int *size, int key) {
+void encrypt(char* filename, char* binFile, int key) {
 	char* input = NULL;
+	int size;
 	int errorCode = readTextFile(filename, &input);
 	if (errorCode == 2) {
 		printf("Error opening text file...");
+		free(input);
+		return;
+	}
+
+	size = strlen(input);
+	int* output = (int*)malloc(size * sizeof(int));
+
+	if (output == NULL) {
+		printf("Error...");
+		free(input);
+		free(output);
+		return;
+	}
+
+	int i;
+	for (i = 0; i < size; i++) {
+		output[i] = i + key + (int)input[i]; //Encryption
+	}
+
+	errorCode = writeBinFile(binFile, &output, (size_t)(size));
+	if (errorCode == 2) {
+		printf("Bin write error...");
+		free(input);
+		free(output);
+		return;
+	}
+	free(input);
+	free(output);
+}
+
+void decrypt(char* binFile, const char* outputFile, const char* flag, int key) {
+	//Open Bin
+	char* input = NULL;
+	int errorCode = readBinFile(binFile, &input, key);
+	if (errorCode == 2) printf("Bin read error...");
+
+	if (flag == "-c") {
+		printArray(input);
+	}
+	else if (flag == "-f") {
+		errorCode = writeTextFile(outputFile, input);
+		if (errorCode == 2) {
+			printf("Error writing to text file...");
+			free(input);
+			return;
+		}
+	}
+	else {
+		printf("Flag invalid...");
+	}
+	free(input);
+}
+
+int main(int argc, char* argv[]) {
+	//Check for memory leaks
+	_CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+
+	int key;
+	if (argc != 5) {
+		printf("Error: Incorrect number of arguments...");
+		return 1;
+	}
+	else if (sscanf_s(argv[4], "%d", &key) != 1) {
+		printf("Error: Invalid key...");
 		return 2;
 	}
-
-	*size = strlen(input);
-	*output = (unsigned int*)malloc(*size * sizeof(unsigned int));
-
-	if (*output == NULL) {
-		printf("Error...");
-		return;
+	else if (strcmp(argv[2], "-e") == 0) {
+		encrypt(argv[1], argv[3], key);
 	}
-
-	int i;
-	for (i = 0; i < *size; i++) {
-		(*output)[i] = /**i + key + */(unsigned int)input[i]; //Encryption
+	else if (strcmp(argv[2], "-d") == 0) {
+		decrypt(argv[3], argv[1], "-f", key);
 	}
-}
-
-void decrypt(unsigned int* input[], char** output, int size, int key) {
-	*output = (char*)malloc((size + 1) * sizeof(char));
-
-	if (*output == NULL) {
-		printf("Error...");
-		return;
+	else {
+		printf("Error: Unexpected flag...");
+		return 3;
 	}
-
-	int i;
-	int j = 0;
-	for (i = 0; i < size - j; i++) {
-		(*output)[i] = (char)input[i]; //- i - key;
-		if ((output)[i] == '\n') j++;
-		printf("%c", (*output)[i]);
-	}
-	(*output)[i] = '\0';
-}
-
-int main() {
-	//Get user input
-	const char *inputFile = "input.txt";
-	const char *binFile   = "output.bin";
-
-	unsigned int *output = NULL;
-	int size;
-	encrypt(inputFile, &output, &size, dkey);
-
-	int errorCode = writeBinFile(binFile, &output, (size_t)size);
-	if (errorCode == 2) printf("Bin write error");
-
-	//Decrypted message
-	//TODO: Add size algorithm
-
-	//Open Bin
-	char *input2 = NULL;
-	errorCode = readBinFile(binFile, &input2, size);
-	if (errorCode == 2) printf("Bin read error");
-
-	char *message = NULL;
-	decrypt(output, &message, size, dkey);
-	//printf("%s", "Decrypted output: \n");
-	printArray(message);
-
-	//free(input2);
-	//free(output);
-	//free(message);
-
 	return 0;
 }
